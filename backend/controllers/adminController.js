@@ -1,3 +1,4 @@
+// backend/controllers/adminController.js
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import Admin from "../models/Admin.js";
@@ -5,6 +6,15 @@ import Creater from "../models/Creater.js";
 import ProgramDocument from "../models/pd/ProgramDocument.js";
 import CourseDocument from "../models/cd/CourseDocument.js";
 import PD from "../models/pd/PD.js";
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import multer from 'multer';
+
+// Get __dirname 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 
 // ─── PDF GENERATION IMPORTS ───────────────────────────────────────────────
 import { generateCurriculumHTML, buildTOCItems } from "../utils/curriculumHtmlGenerator.js";
@@ -65,6 +75,21 @@ const buildFormattedCD = (cd) => {
     },
   };
 };
+
+const storage = multer.memoryStorage();
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'), false);
+    }
+  }
+});
+
+export const uploadImage = upload.single('image');
 
 const getJurisdictionFilter = async (admin) => {
   const createrQuery = {};
@@ -1518,3 +1543,388 @@ function buildSimpleTOCItems(bookData) {
 
   return items;
 }
+
+// ─── FRONT MATTER PAGES CONTROLLERS ───────────────────────────────────────
+
+/**
+ * Get all front matter pages (HTML templates)
+ * ONLY ONE DECLARATION
+ */
+export const getFrontMatterPages = async (req, res) => {
+  try {
+    const templatesDir = path.join(__dirname, '../public/templates/front_matter/partials');
+    
+    if (!fs.existsSync(templatesDir)) {
+      const altPath = path.join(process.cwd(), 'backend/public/templates/front_matter/partials');
+      console.log('📁 Trying alternative path:', altPath);
+      
+      if (fs.existsSync(altPath)) {
+        console.log('✅ Found templates at alternative path:', altPath);
+        return getPagesFromDirectory(altPath, res);
+      }
+      
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Templates directory not found' 
+      });
+    }
+    
+    return getPagesFromDirectory(templatesDir, res);
+  } catch (error) {
+    console.error('Error fetching front matter pages:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch pages: ' + error.message 
+    });
+  }
+};
+
+const getPagesFromDirectory = (templatesDir, res) => {
+  try {
+    const files = fs.readdirSync(templatesDir);
+    
+    const pages = files
+      .filter(file => file.endsWith('.html'))
+      .filter(file => !file.startsWith('_') && !file.startsWith('.'))
+      .map(file => {
+        try {
+          const filePath = path.join(templatesDir, file);
+          const content = fs.readFileSync(filePath, 'utf8');
+          const stats = fs.statSync(filePath);
+          
+          return {
+            name: path.basename(file, '.html'),
+            content: content,
+            updatedAt: stats.mtime.toISOString(),
+            size: stats.size
+          };
+        } catch (err) {
+          console.error(`Error reading file ${file}:`, err);
+          return null;
+        }
+      })
+      .filter(page => page !== null);
+    
+    return res.json({ 
+      success: true, 
+      pages: pages 
+    });
+  } catch (error) {
+    console.error('Error reading directory:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Failed to read directory: ' + error.message 
+    });
+  }
+};
+
+/**
+ * Save a front matter page (HTML template)
+ * ONLY ONE DECLARATION
+ */
+export const saveFrontMatterPage = async (req, res) => {
+  try {
+    const { pageName, content } = req.body;
+    
+    if (!pageName) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Page name is required' 
+      });
+    }
+    
+    if (content === undefined || content === null) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Content is required' 
+      });
+    }
+    
+    const templatesDir = path.join(__dirname, '../public/templates/front_matter/partials');
+    
+    if (!fs.existsSync(templatesDir)) {
+      const altPath = path.join(process.cwd(), 'backend/public/templates/front_matter/partials');      
+      if (fs.existsSync(altPath)) {
+        return savePageToDirectory(altPath, pageName, content, res);
+      }
+      
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Templates directory not found' 
+      });
+    }
+    
+    return savePageToDirectory(templatesDir, pageName, content, res);
+  } catch (error) {
+    console.error('Error saving page:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to save page: ' + error.message 
+    });
+  }
+};
+
+const savePageToDirectory = (templatesDir, pageName, content, res) => {
+  try {
+    const safePageName = path.basename(pageName);
+    const filePath = path.join(templatesDir, `${safePageName}.html`);
+        
+    if (!fs.existsSync(templatesDir)) {
+      console.error("❌ Templates directory not found:", templatesDir);
+      return res.status(404).json({
+        success: false,
+        message: "Templates directory not found",
+        path: templatesDir,
+      });
+    }
+    
+    if (!fs.existsSync(filePath)) {
+      console.error("❌ File not found:", filePath);
+      const availableFiles = fs.readdirSync(templatesDir);
+      console.log("📁 Available files:", availableFiles);
+      
+      return res.status(404).json({
+        success: false,
+        message: `Page "${safePageName}.html" not found in templates directory`,
+        filePath,
+        availableFiles,
+      });
+    }
+    
+    fs.writeFileSync(filePath, content, "utf8");
+    
+    return res.status(200).json({
+      success: true,
+      message: "Page saved successfully",
+      pageName: safePageName,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("❌ Error saving file:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to save file: " + error.message,
+    });
+  }
+};
+
+/**
+ * Get a single front matter page
+ * ONLY ONE DECLARATION
+ */
+export const getFrontMatterPage = async (req, res) => {
+  try {
+    const { pageName } = req.params;
+    
+    if (!pageName) {
+      return res.status(400).json({
+        success: false,
+        message: "Page name is required",
+      });
+    }
+    
+    const templatesDir = path.join(__dirname, '../public/templates/front_matter/partials');
+    
+    if (!fs.existsSync(templatesDir)) {
+      const altPath = path.join(process.cwd(), 'backend/public/templates/front_matter/partials');
+      if (fs.existsSync(altPath)) {
+        return getPageFromDirectory(altPath, pageName, res);
+      }
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Templates directory not found' 
+      });
+    }
+    
+    return getPageFromDirectory(templatesDir, pageName, res);
+  } catch (error) {
+    console.error('Error fetching page:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch page: ' + error.message 
+    });
+  }
+};
+
+const getPageFromDirectory = (templatesDir, pageName, res) => {
+  try {
+    const filePath = path.join(templatesDir, `${pageName}.html`);
+    
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ 
+        success: false, 
+        message: `Page "${pageName}.html" not found` 
+      });
+    }
+    
+    const content = fs.readFileSync(filePath, 'utf8');
+    const stats = fs.statSync(filePath);
+    
+    res.json({ 
+      success: true, 
+      page: {
+        name: pageName,
+        content: content,
+        updatedAt: stats.mtime.toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('Error reading file:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Failed to read file: ' + error.message 
+    });
+  }
+};
+
+/**
+ * Reset a front matter page to default
+ * ONLY ONE DECLARATION
+ */
+export const resetFrontMatterPage = async (req, res) => {
+  try {
+    const { pageName } = req.params;
+    
+    if (!pageName) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Page name is required' 
+      });
+    }
+    
+    const templatesDir = path.join(__dirname, '../public/templates/front_matter/partials');
+    
+    if (!fs.existsSync(templatesDir)) {
+      const altPath = path.join(process.cwd(), 'backend/public/templates/front_matter/partials');
+      if (fs.existsSync(altPath)) {
+        return resetPageInDirectory(altPath, pageName, res);
+      }
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Templates directory not found' 
+      });
+    }
+    
+    return resetPageInDirectory(templatesDir, pageName, res);
+  } catch (error) {
+    console.error('Error resetting page:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to reset page: ' + error.message 
+    });
+  }
+};
+
+const resetPageInDirectory = (templatesDir, pageName, res) => {
+  try {
+    const defaultPath = path.join(templatesDir, `_default_${pageName}.html`);
+    const currentPath = path.join(templatesDir, `${pageName}.html`);
+    
+    if (!fs.existsSync(defaultPath)) {
+      return res.status(404).json({ 
+        success: false, 
+        message: `Default template for "${pageName}.html" not found` 
+      });
+    }
+    
+    const defaultContent = fs.readFileSync(defaultPath, 'utf8');
+    fs.writeFileSync(currentPath, defaultContent, 'utf8');
+    
+    console.log(`[Admin] Reset page: ${pageName}.html to default`);
+    
+    res.json({ 
+      success: true, 
+      message: 'Page reset to default successfully'
+    });
+  } catch (error) {
+    console.error('Error resetting file:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Failed to reset file: ' + error.message 
+    });
+  }
+};
+
+export const uploadFrontMatterImage = async (req, res) => {
+  try {
+    uploadImage(req, res, async (err) => {
+      if (err) {
+        console.error('Multer error:', err);
+        return res.status(400).json({
+          success: false,
+          message: err.message || 'File upload failed'
+        });
+      }
+
+      const { pageName, filename, oldFilename } = req.body;
+      
+      // console.log("========================================");
+      // console.log("📤 UPLOAD FRONT MATTER IMAGE");
+      // console.log("Page name:", pageName);
+      // console.log("Filename:", filename);
+      // console.log("Old filename:", oldFilename);
+      // console.log("File received:", req.file ? req.file.originalname : 'No file');
+      // console.log("========================================");
+
+      if (!pageName) {
+        return res.status(400).json({
+          success: false,
+          message: 'Page name is required'
+        });
+      }
+
+      if (!filename) {
+        return res.status(400).json({
+          success: false,
+          message: 'Filename is required'
+        });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: 'No image file provided'
+        });
+      }
+
+      const imagesDir = path.join(__dirname, '../public/templates/front_matter/images');
+      
+      // console.log("📁 Images directory:", imagesDir);
+
+      if (!fs.existsSync(imagesDir)) {
+        fs.mkdirSync(imagesDir, { recursive: true });
+        // console.log("📁 Created images directory");
+      }
+
+      const safeFilename = path.basename(filename);
+      const filePath = path.join(imagesDir, safeFilename);
+
+      if (oldFilename && oldFilename !== safeFilename) {
+        const oldFilePath = path.join(imagesDir, oldFilename);
+        if (fs.existsSync(oldFilePath)) {
+          fs.unlinkSync(oldFilePath);
+          // console.log(`🗑️ Removed old image: ${oldFilename}`);
+        }
+      }
+
+      fs.writeFileSync(filePath, req.file.buffer);
+      
+      // console.log(`✅ [Admin] Saved image: ${safeFilename}`);
+      // console.log(`📁 Path: ${filePath}`);
+      // console.log(`📊 Size: ${req.file.size} bytes`);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Image uploaded successfully',
+        filename: safeFilename,
+        pageName: pageName
+      });
+    });
+  } catch (error) {
+    console.error('❌ Error uploading image:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to upload image: ' + error.message
+    });
+  }
+};

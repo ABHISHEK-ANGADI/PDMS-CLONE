@@ -21,6 +21,12 @@ import {
   downloadCurriculumBook,
   downloadCurriculumBookPD,
   previewCurriculumBook,
+  // ─── FRONT MATTER PAGES IMPORTS ─────────────────────────────────────────
+  getFrontMatterPages, 
+  saveFrontMatterPage,
+  getFrontMatterPage,
+  resetFrontMatterPage ,
+  uploadFrontMatterImage,
 } from "../controllers/adminController.js";
 import authAdmin from "../middlewares/adminAuth.js";
 
@@ -63,5 +69,23 @@ adminRouter.get("/compiler/preview/:programId", previewCurriculumBook);
 
 // Admin PD List
 adminRouter.get("/pds/all", getAllPDsForAdmin);
+
+// ─── FRONT MATTER PAGES ROUTES ───────────────────────────────────────────
+
+// Get all front matter pages
+adminRouter.get('/compiler/frontmatter/pages', getFrontMatterPages);
+
+// Get a single front matter page
+adminRouter.get('/compiler/frontmatter/page/:pageName', getFrontMatterPage);
+
+// Save a front matter page
+adminRouter.post('/compiler/frontmatter/save', saveFrontMatterPage);
+
+// Reset a front matter page to default
+adminRouter.post('/compiler/frontmatter/reset/:pageName', resetFrontMatterPage);
+
+// ─── NEW: IMAGE UPLOAD ROUTE ─────────────────────────────────────────────
+adminRouter.post('/compiler/frontmatter/image', uploadFrontMatterImage);
+
 
 export default adminRouter;
