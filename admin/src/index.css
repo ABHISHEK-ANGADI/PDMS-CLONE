@@ -8,3 +8,18 @@
 * {
   font-family: Outfit;
 }
+
+/* =========================================
+   Curriculum Compiler
+   ========================================= */
+
+.front-matter-image-selected {
+  outline: 3px dashed #9ca3af;
+  outline-offset: 5px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.front-matter-image-selected:hover {
+  outline-color: #6b7280;
+}

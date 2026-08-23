@@ -1,4 +1,5 @@
 // admin/components/Preview.jsx
+
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
@@ -14,12 +15,16 @@ import {
   Download,
   CheckCircle,
   Copy,
-  Info,          // added for banner icon
+  Info,
+  FileDown,
+  FileText,
 } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import parse from "html-react-parser";
 import { toast } from "react-hot-toast";
 import html2pdf from "html2pdf.js";
+// Import DocumentExporter functions
+import { exportToWord, normalizeForWord } from "./DocumentExporter";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    UTILITY HELPERS
@@ -267,6 +272,7 @@ const Preview = ({
   const [progress, setProgress] = useState(0);
   const [copied, setCopied] = useState(false);
   const [isBookDownloading, setIsBookDownloading] = useState(false);
+  const [isExportingDocument, setIsExportingDocument] = useState(false);
 
   // Determine if we are showing a book preview
   const isBook = !!bookHtml && !!bookData;
@@ -504,18 +510,18 @@ const Preview = ({
   };
 
   // ── Generate filename ──────────────────────────────────────────────────
-  const generateFilename = useCallback(() => {
+  const generateFilename = useCallback((extension = "pdf") => {
     if (isBook && programIdForBook) {
-      return `${programIdForBook}_Curriculum_Book.pdf`;
+      return `${programIdForBook}_Curriculum_Book.${extension}`;
     }
-    if (!data) return "Program_Document.pdf";
+    if (!data) return `Program_Document.${extension}`;
     const { pdData, metaData } = data;
     const prog = (pdData.details?.program_name || "Program")
       .replace(/[^\w\s-]/g, "")
       .replace(/\s+/g, "_")
       .trim();
     const ver = (metaData.versionNo || "1_0_0").replace(/\./g, "_");
-    return `PD_${prog}_v${ver}.pdf`;
+    return `PD_${prog}_v${ver}.${extension}`;
   }, [isBook, programIdForBook, data]);
 
   // ── Handle download (for PD or Book) ────────────────────────────────
@@ -558,7 +564,7 @@ const Preview = ({
       toast.error("Document not ready");
       return;
     }
-    const filename = generateFilename();
+    const filename = generateFilename("pdf");
     const opt = {
       margin: 0,
       filename: filename,
@@ -590,9 +596,245 @@ const Preview = ({
     setDdOpen(false);
   }, [isBook, programIdForBook, adminToken, axios, generateFilename]);
 
+  // ── Handle Export Document (HTML) ────────────────────────────────────
+  const handleExportHTML = useCallback(async () => {
+    setIsExportingDocument(true);
+    const toastId = toast.loading("Preparing HTML document for export...");
+
+    try {
+      let documentHtml = "";
+
+      if (isBook && bookData) {
+        // For book preview, use the wrappedBookHtml
+        documentHtml = wrappedBookHtml;
+      } else if (data) {
+        // For PD preview, get the HTML from the rendered document
+        const element = docRef.current;
+        if (!element) {
+          toast.error("Document not ready", { id: toastId });
+          setIsExportingDocument(false);
+          setDdOpen(false);
+          return;
+        }
+
+        // Clone the document to avoid affecting the live view
+        const clone = element.cloneNode(true);
+        documentHtml = clone.outerHTML;
+      } else {
+        toast.error("No document data available", { id: toastId });
+        setIsExportingDocument(false);
+        setDdOpen(false);
+        return;
+      }
+
+      // Create a full HTML document with proper styles
+      const fullHtml = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${isBook ? programNameForBook : data?.metaData?.programName || "Curriculum"} - Document</title>
+  <style>
+    /* Print styles */
+    @media print {
+      body * { visibility: visible; }
+      body { font-family: "Times New Roman", Times, serif; font-size: 11pt; color: #000; margin: 15mm; }
+      .page-break { page-break-before: always; }
+      .cover-page { height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+      h1 { font-family: Arial, sans-serif; font-size: 24pt; margin-bottom: 10px; color: #1a3a5c; }
+      h2 { font-family: Arial, sans-serif; font-size: 18pt; margin-bottom: 5px; }
+      h3 { font-family: Arial, sans-serif; font-size: 14pt; margin-top: 20px; border-bottom: 1px solid #000; padding-bottom: 5px;}
+      table { width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 10pt; page-break-inside: auto;}
+      tr { page-break-inside: avoid; page-break-after: auto; }
+      th, td { border: 1px solid #000; padding: 6px; text-align: left; vertical-align: top;}
+      th { background-color: #f0f0f0 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-weight: bold;}
+      .text-center { text-align: center; }
+      .cdp-rich p { margin: 0 0 5px 0; text-align: justify;}
+      .cdp-rich ul, .cdp-rich ol { padding-left: 20px; margin: 0 0 10px 0;}
+      @page { size: A4 portrait; margin: 15mm 15mm; }
+    }
+    /* Screen styles for preview */
+    body {
+      font-family: "Times New Roman", Times, serif;
+      font-size: 11pt;
+      color: #000;
+      background: #fff;
+      padding: 20px;
+      max-width: 210mm;
+      margin: 0 auto;
+    }
+    .pd-cover {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      min-height: 80vh;
+      border: 3px double #000;
+      padding: 20mm;
+      margin-bottom: 20px;
+    }
+    .pd-cover-uni { font-size: 26pt; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 20px; }
+    .pd-cover-type { font-size: 14pt; font-weight: bold; text-transform: uppercase; margin-top: 20px; letter-spacing: 2px;}
+    .pd-cover-scheme { font-size: 12pt; text-transform: uppercase; color: #333; margin-top: 5px; }
+    .pd-cover-program { font-size: 22pt; font-weight: bold; text-transform: uppercase; margin: 40px 0; padding: 20px 0; border-top: 1px solid #000; border-bottom: 1px solid #000; }
+    .pd-cover-school { margin-top: auto; font-size: 12pt; font-weight: bold; text-transform: uppercase; }
+    .pd-sec-major { font-size: 12pt; font-weight: bold; background: #000; color: #fff; padding: 6px 12px; margin: 30px 0 15px; text-transform: uppercase; page-break-after: avoid; }
+    .pd-sec-minor { font-size: 11pt; font-weight: bold; border-bottom: 1px solid #000; padding-bottom: 4px; margin: 20px 0 10px; color: #000; page-break-after: avoid; }
+    .pd-doc table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 10.5pt; }
+    .pd-doc th { background: #e0e0e0; font-weight: bold; text-align: center; padding: 6px 10px; border: 1px solid #000; }
+    .pd-doc td { border: 1px solid #000; padding: 6px 10px; vertical-align: top; }
+    .pd-doc tfoot td { background: #f5f5f5; font-weight: bold; text-align: center; }
+    .w-serial { width: 50px; text-align: center; } 
+    .w-code { width: 120px; font-weight: bold; } 
+    .w-cr { width: 60px; text-align: center; }
+    .w-label { width: 250px; font-weight: bold; background: #f9f9f9; }
+    .pd-tc { text-align: center; } 
+    .pd-tj { text-align: justify; } 
+    .pd-fb { font-weight: bold; }
+    .pd-rich p { margin: 0 0 8px; text-align: justify; }
+    .pd-rich ul, .pd-rich ol { margin: 4px 0 10px 0; padding-left: 24px; }
+    .pd-rich li { margin-bottom: 4px; text-align: justify; }
+    .pd-credit-box { border: 1px solid #000; background: #f9f9f9; padding: 10px 15px; margin-bottom: 15px; font-weight: bold; text-align: center; }
+    .pd-sem-hdr { font-size: 11pt; font-weight: bold; text-align: left; margin: 25px 0 10px; border-bottom: 1px solid #ccc; padding-bottom: 4px; text-transform: uppercase; }
+    .pd-cat-hdr { font-size: 10.5pt; font-weight: bold; text-align: left; margin: 15px 0 8px; color: #333; }
+    .pd-sig { display: flex; justify-content: space-between; margin-top: 60px; }
+    .pd-sig-box { width: 40%; text-align: center; border-top: 1px solid #000; padding-top: 8px; font-weight: bold; }
+    .pd-page-break { page-break-after: always; border-bottom: 1px dashed #ddd; margin: 20px 0; padding: 8px 0; text-align: center; font-size: 8pt; color: #bbb; }
+    .pd-page-break::after { content: "— Page Break —"; letter-spacing: 2px; }
+    .pd-int-hdr { text-align: center; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 25px; }
+    .pd-int-hdr-prog { font-size: 16pt; font-weight: bold; text-transform: uppercase; color: #000; }
+    .pd-int-hdr-meta { font-size: 10pt; color: #555; }
+  </style>
+</head>
+<body>
+  ${documentHtml}
+</body>
+</html>`;
+
+      // Create a Blob and download
+      const blob = new Blob([fullHtml], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const filename = generateFilename("html");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      toast.success("HTML document exported successfully!", { id: toastId });
+    } catch (error) {
+      console.error("Export error:", error);
+      toast.error(error.message || "Failed to export document", { id: toastId });
+    } finally {
+      setIsExportingDocument(false);
+      setDdOpen(false);
+    }
+  }, [isBook, bookData, data, wrappedBookHtml, generateFilename]);
+
+  // ── Handle Export as Word Document (.doc) using DocumentExporter ──
+  const handleExportWord = useCallback(async () => {
+    setIsExportingDocument(true);
+    const toastId = toast.loading("Preparing Word document for export...");
+
+    try {
+      let documentHtml = "";
+      let documentStyles = "";
+
+      if (isBook && bookData) {
+        const iframe = docRef.current;
+        const iframeDocument = iframe?.contentDocument;
+
+        if (iframeDocument?.body) {
+          const exportRoot = iframeDocument.body.cloneNode(true);
+          documentStyles = Array.from(
+            iframeDocument.querySelectorAll("head style")
+          )
+            .map((style) => style.textContent || "")
+            .filter(Boolean)
+            .join("\n");
+
+          normalizeForWord(exportRoot, "book");
+          documentHtml = exportRoot.outerHTML;
+        } else if (wrappedBookHtml) {
+          const parser = new DOMParser();
+          const parsed = parser.parseFromString(wrappedBookHtml, "text/html");
+          const exportRoot = parsed.body?.cloneNode(true);
+
+          documentStyles = Array.from(parsed.querySelectorAll("head style"))
+            .map((style) => style.textContent || "")
+            .filter(Boolean)
+            .join("\n");
+
+          if (exportRoot) {
+            normalizeForWord(exportRoot, "book");
+            documentHtml = exportRoot.outerHTML;
+          }
+        }
+
+        if (!documentHtml) {
+          toast.error("Book document is not ready", { id: toastId });
+          return;
+        }
+
+        await exportToWord({
+          documentHtml,
+          documentStyles,
+          filename: generateFilename("doc"),
+          programName: programNameForBook,
+          mode: "book",
+        });
+
+      } else if (data) {
+        const element = docRef.current;
+        if (!element) {
+          toast.error("Document not ready", { id: toastId });
+          return;
+        }
+
+        const exportRoot = element.cloneNode(true);
+        normalizeForWord(exportRoot, "pd");
+        documentHtml = exportRoot.outerHTML;
+        documentStyles = STYLES;
+
+        await exportToWord({
+          documentHtml,
+          documentStyles,
+          filename: generateFilename("doc"),
+          programName: data.metaData?.programName || "Program Document",
+          mode: "pd",
+        });
+
+      } else {
+        toast.error("No document data available", { id: toastId });
+        return;
+      }
+
+      toast.success("Word document exported successfully!", { id: toastId });
+
+    } catch (error) {
+      console.error("Export error:", error);
+      toast.error(error?.message || "Failed to export Word document", {
+        id: toastId,
+      });
+    } finally {
+      setIsExportingDocument(false);
+      setDdOpen(false);
+    }
+  }, [
+    isBook,
+    bookData,
+    data,
+    wrappedBookHtml,
+    generateFilename,
+    programNameForBook,
+  ]);
+
   const handleCopyFilename = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(generateFilename());
+      await navigator.clipboard.writeText(generateFilename("pdf"));
       setCopied(true);
       setTimeout(() => setCopied(false), 3000);
       toast.success("Filename copied!");
@@ -769,6 +1011,44 @@ const Preview = ({
                     </div>
                     <div className="pd-dropdown-item-sub">
                       {isBook ? "Download decorated PDF" : "Opens print dialog"}
+                    </div>
+                  </div>
+                </button>
+                <button
+                  className="pd-dropdown-item"
+                  onClick={handleExportHTML}
+                  disabled={isExportingDocument}
+                >
+                  {isExportingDocument ? (
+                    <RefreshCw size={15} className="animate-spin" style={{ color: "#4ade80" }} />
+                  ) : (
+                    <FileDown size={15} />
+                  )}
+                  <div>
+                    <div className="pd-dropdown-item-label">
+                      {isExportingDocument ? "Exporting..." : "Export as HTML"}
+                    </div>
+                    <div className="pd-dropdown-item-sub">
+                      Download as HTML document
+                    </div>
+                  </div>
+                </button>
+                <button
+                  className="pd-dropdown-item"
+                  onClick={handleExportWord}
+                  disabled={isExportingDocument}
+                >
+                  {isExportingDocument ? (
+                    <RefreshCw size={15} className="animate-spin" style={{ color: "#4ade80" }} />
+                  ) : (
+                    <FileText size={15} />
+                  )}
+                  <div>
+                    <div className="pd-dropdown-item-label">
+                      {isExportingDocument ? "Exporting..." : "Export as Document"}
+                    </div>
+                    <div className="pd-dropdown-item-sub">
+                      Download as Word document (.doc)
                     </div>
                   </div>
                 </button>
