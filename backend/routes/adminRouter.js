@@ -27,6 +27,8 @@ import {
   getFrontMatterPage,
   resetFrontMatterPage ,
   uploadFrontMatterImage,
+  exportCurriculumDocument,
+  exportMultipleFormats,
 } from "../controllers/adminController.js";
 import authAdmin from "../middlewares/adminAuth.js";
 
@@ -86,6 +88,14 @@ adminRouter.post('/compiler/frontmatter/reset/:pageName', resetFrontMatterPage);
 
 // ─── NEW: IMAGE UPLOAD ROUTE ─────────────────────────────────────────────
 adminRouter.post('/compiler/frontmatter/image', uploadFrontMatterImage);
+
+// ─── DOCUMENT EXPORT ROUTES ─────────────────────────────────────
+
+// Export as document (Word/HTML/DOCX)
+adminRouter.post("/export-doc/:programId", authAdmin, exportCurriculumDocument);
+
+// Export multiple formats at once
+adminRouter.post("/export-multiple/:programId", authAdmin, exportMultipleFormats);
 
 
 export default adminRouter;

@@ -23,8 +23,7 @@ import { useAppContext } from "../context/AppContext";
 import parse from "html-react-parser";
 import { toast } from "react-hot-toast";
 import html2pdf from "html2pdf.js";
-// Import DocumentExporter functions
-import { exportToWord, normalizeForWord } from "./DocumentExporter";
+// DocumentExporter removed - using backend API instead
 
 /* ─────────────────────────────────────────────────────────────────────────────
    UTILITY HELPERS
@@ -272,7 +271,8 @@ const Preview = ({
   const [progress, setProgress] = useState(0);
   const [copied, setCopied] = useState(false);
   const [isBookDownloading, setIsBookDownloading] = useState(false);
-  const [isExportingDocument, setIsExportingDocument] = useState(false);
+  const [isExportingHTML, setIsExportingHTML] = useState(false);
+  const [isExportingWord, setIsExportingWord] = useState(false);
 
   // Determine if we are showing a book preview
   const isBook = !!bookHtml && !!bookData;
@@ -598,7 +598,7 @@ const Preview = ({
 
   // ── Handle Export Document (HTML) ────────────────────────────────────
   const handleExportHTML = useCallback(async () => {
-    setIsExportingDocument(true);
+    setIsExportingHTML(true);
     const toastId = toast.loading("Preparing HTML document for export...");
 
     try {
@@ -612,7 +612,7 @@ const Preview = ({
         const element = docRef.current;
         if (!element) {
           toast.error("Document not ready", { id: toastId });
-          setIsExportingDocument(false);
+          setIsExportingHTML(false);
           setDdOpen(false);
           return;
         }
@@ -622,7 +622,7 @@ const Preview = ({
         documentHtml = clone.outerHTML;
       } else {
         toast.error("No document data available", { id: toastId });
-        setIsExportingDocument(false);
+        setIsExportingHTML(false);
         setDdOpen(false);
         return;
       }
@@ -729,98 +729,144 @@ const Preview = ({
       console.error("Export error:", error);
       toast.error(error.message || "Failed to export document", { id: toastId });
     } finally {
-      setIsExportingDocument(false);
+      setIsExportingHTML(false);
       setDdOpen(false);
     }
   }, [isBook, bookData, data, wrappedBookHtml, generateFilename]);
 
-  // ── Handle Export as Word Document (.doc) using DocumentExporter ──
+  // ── Handle Export as Word Document (.doc) using Backend API ──
   const handleExportWord = useCallback(async () => {
-    setIsExportingDocument(true);
+    setIsExportingWord(true);
     const toastId = toast.loading("Preparing Word document for export...");
 
     try {
       let documentHtml = "";
-      let documentStyles = "";
+      let programId = "";
+      let programName = "";
 
       if (isBook && bookData) {
+        // For book preview - get HTML from iframe
         const iframe = docRef.current;
         const iframeDocument = iframe?.contentDocument;
 
         if (iframeDocument?.body) {
-          const exportRoot = iframeDocument.body.cloneNode(true);
-          documentStyles = Array.from(
-            iframeDocument.querySelectorAll("head style")
-          )
-            .map((style) => style.textContent || "")
-            .filter(Boolean)
-            .join("\n");
-
-          normalizeForWord(exportRoot, "book");
-          documentHtml = exportRoot.outerHTML;
+          documentHtml = iframeDocument.body.innerHTML;
         } else if (wrappedBookHtml) {
-          const parser = new DOMParser();
-          const parsed = parser.parseFromString(wrappedBookHtml, "text/html");
-          const exportRoot = parsed.body?.cloneNode(true);
-
-          documentStyles = Array.from(parsed.querySelectorAll("head style"))
-            .map((style) => style.textContent || "")
-            .filter(Boolean)
-            .join("\n");
-
-          if (exportRoot) {
-            normalizeForWord(exportRoot, "book");
-            documentHtml = exportRoot.outerHTML;
-          }
+          // Extract body content from wrapped HTML
+          const match = wrappedBookHtml.match(/<body>([\s\S]*?)<\/body>/);
+          documentHtml = match ? match[1] : wrappedBookHtml;
         }
+
+        programId = programIdForBook;
+        programName = programNameForBook;
 
         if (!documentHtml) {
           toast.error("Book document is not ready", { id: toastId });
+          setIsExportingWord(false);
+          setDdOpen(false);
           return;
         }
 
-        await exportToWord({
-          documentHtml,
-          documentStyles,
-          filename: generateFilename("doc"),
-          programName: programNameForBook,
-          mode: "book",
-        });
+        // Call backend API for book export
+        const response = await axios.post(
+          `/api/admin/export-doc/${programId}`,
+          {
+            format: "docx",
+            html: documentHtml,
+            title: `${programName} - Curriculum Book`,
+            programName: programName,
+            mode: "book",
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${adminToken}`,
+            },
+            responseType: "blob",
+          }
+        );
+
+        // Download the file
+        const url = window.URL.createObjectURL(new Blob([response.data]));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = generateFilename("doc");
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(url);
+
+        toast.success("Word document exported successfully!", { id: toastId });
 
       } else if (data) {
+        // For PD preview - get HTML from rendered document
         const element = docRef.current;
         if (!element) {
           toast.error("Document not ready", { id: toastId });
+          setIsExportingWord(false);
+          setDdOpen(false);
           return;
         }
 
-        const exportRoot = element.cloneNode(true);
-        normalizeForWord(exportRoot, "pd");
-        documentHtml = exportRoot.outerHTML;
-        documentStyles = STYLES;
+        // Clone the document to avoid affecting the live view
+        const clone = element.cloneNode(true);
+        documentHtml = clone.outerHTML;
+        
+        // Get program info from data
+        programId = data.metaData?.programCode || data.pdData?.details?.program_code || "";
+        programName = data.metaData?.programName || "Program Document";
 
-        await exportToWord({
-          documentHtml,
-          documentStyles,
-          filename: generateFilename("doc"),
-          programName: data.metaData?.programName || "Program Document",
-          mode: "pd",
-        });
+        if (!documentHtml) {
+          toast.error("No document data available", { id: toastId });
+          setIsExportingWord(false);
+          setDdOpen(false);
+          return;
+        }
+
+        // Call backend API for PD export
+        const response = await axios.post(
+          `/api/creater/cd/export-doc/${programId}`,
+          {
+            format: "doc",
+            html: documentHtml,
+            title: `${programName} - Curriculum Document`,
+            programName: programName,
+            mode: "pd",
+          },
+          {
+            headers: {
+              createrToken: createrToken,
+            },
+            responseType: "blob",
+          }
+        );
+
+        // Download the file
+        const url = window.URL.createObjectURL(new Blob([response.data]));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = generateFilename("doc");
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(url);
+
+        toast.success("Word document exported successfully!", { id: toastId });
 
       } else {
         toast.error("No document data available", { id: toastId });
+        setIsExportingWord(false);
+        setDdOpen(false);
         return;
       }
 
-      toast.success("Word document exported successfully!", { id: toastId });
-
     } catch (error) {
       console.error("Export error:", error);
-      toast.error(error?.message || "Failed to export Word document", {
-        id: toastId,
-      });
+      toast.error(
+        error.response?.data?.message || error.message || "Failed to export Word document",
+        { id: toastId }
+      );
     } finally {
-      setIsExportingDocument(false);
+      setIsExportingWord(false);
       setDdOpen(false);
     }
   }, [
@@ -829,7 +875,11 @@ const Preview = ({
     data,
     wrappedBookHtml,
     generateFilename,
+    programIdForBook,
     programNameForBook,
+    axios,
+    adminToken,
+    createrToken,
   ]);
 
   const handleCopyFilename = useCallback(async () => {
@@ -1017,16 +1067,16 @@ const Preview = ({
                 <button
                   className="pd-dropdown-item"
                   onClick={handleExportHTML}
-                  disabled={isExportingDocument}
+                  disabled={isExportingHTML}
                 >
-                  {isExportingDocument ? (
+                  {isExportingHTML ? (
                     <RefreshCw size={15} className="animate-spin" style={{ color: "#4ade80" }} />
                   ) : (
                     <FileDown size={15} />
                   )}
                   <div>
                     <div className="pd-dropdown-item-label">
-                      {isExportingDocument ? "Exporting..." : "Export as HTML"}
+                      {isExportingHTML ? "Exporting..." : "Export as HTML"}
                     </div>
                     <div className="pd-dropdown-item-sub">
                       Download as HTML document
@@ -1036,16 +1086,16 @@ const Preview = ({
                 <button
                   className="pd-dropdown-item"
                   onClick={handleExportWord}
-                  disabled={isExportingDocument}
+                  disabled={isExportingWord}
                 >
-                  {isExportingDocument ? (
+                  {isExportingWord ? (
                     <RefreshCw size={15} className="animate-spin" style={{ color: "#4ade80" }} />
                   ) : (
                     <FileText size={15} />
                   )}
                   <div>
                     <div className="pd-dropdown-item-label">
-                      {isExportingDocument ? "Exporting..." : "Export as Document"}
+                      {isExportingWord ? "Exporting..." : "Export as Document"}
                     </div>
                     <div className="pd-dropdown-item-sub">
                       Download as Word document (.doc)
