@@ -1,3 +1,4 @@
+
 {
   "version": 2,
   "functions": {
@@ -9,6 +10,9 @@
         "models/**",
         "config/**",
         "routes/**",
+        "controllers/**",
+        "services/**",
+        "utils/**",
         "public/**"
       ]
     }
