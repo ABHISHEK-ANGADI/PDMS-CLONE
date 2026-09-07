@@ -5,8 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js",
-    "vercel-build": "pip3 install pdfplumber"
+    "dev": "nodemon server.js"
   },
   "keywords": [],
   "author": "",
